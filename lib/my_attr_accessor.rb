@@ -15,11 +15,23 @@ class Object
 
     # writer (aka setter) methods are called variable_name=
     def self.my_attr_reader(*variables)
+        variables.each do |v|
+            define_method(v) do
+                instance_variable_get("@#{v}")
+            end
+        end
     end
 
     def self.my_attr_writer(*variables)
+        variables.each do |v|
+            define_method("#{v}=") do |value|
+                instance_variable_set("@#{v}", value)
+            end
+        end
     end
 
     def self.my_attr_accessor(*variables)
+        self.my_attr_reader(*variables)
+        self.my_attr_writer(*variables)
     end
 end
