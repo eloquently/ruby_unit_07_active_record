@@ -1,3 +1,9 @@
+# to run your tests, you will need to run the following command to set up the
+# db. It will take a couple minutes to run. Note: don't just copy your db files
+# from the previous exercises. The schema is slightly different, so they needd
+# to be created from scratch
+#       ruby spec/setup_dbs.rb
+
 require 'active_support/inflector'
 require 'sqlite3'
 
