@@ -40,13 +40,16 @@ class ORMapper
     # Otherwise return the default table name (pluralized and snake_case version
     # of the class name)
     @table_name = nil
+    @columns = nil
+
     def self.table_name
-        # return ____ || self.new.class.to_s.___________________
+        return @table_name || self.new.class.to_s.pluralize.underscore
     end
 
     # This method will allow users to choose their own table name instead of the
     # default table name
     def self.table_name=(table_name)
+        @table_name = table_name
     end
 
     # This method will return an array of columns in the table corresponding
@@ -62,8 +65,11 @@ class ORMapper
     # since ::columns is a class method rather than an instance method,
     # if you want to refer to from inside an instance method, use
     # self.class.columns (same for table_name)
-    @columns = nil
     def self.columns
+        return @columns if @columns != nil
+        results = $db.execute2("SELECT * FROM #{self.table_name} LIMIT 1;")
+        @columns = results.shift.map(&:to_sym)
+        return @columns
     end
 
     # We want to be able to store data kept in the rows of our database in our
@@ -76,6 +82,8 @@ class ORMapper
     # hash with a key for each column in the database, with nil for each value
     @attributes = nil
     def attributes
+        @attributes ||= Hash[*self.class.columns.map { |c| [c, nil]}.flatten]
+        return @attributes
     end
 
     # Now all we need is setter and getter methods for each column.
@@ -90,6 +98,17 @@ class ORMapper
     # school.name # => "Tempe High"
 
     def self.create_column_accessors
+        self.columns.each do |col|
+            define_method(col) do
+                self.attributes[col]
+            end
+        end
+
+        self.columns.each do |col|
+            define_method("#{col}=") do |value|
+                self.attributes[col] = value
+            end
+        end
     end
 
     # Instead of setting each attribute individually, it would be much easier to
@@ -115,6 +134,9 @@ class ORMapper
     # for you when you save the object (this will work out great if you use
     # autoincrement on your primary key when you create the table).
     def initialize(params={})
+        params.each do |k,v|
+            self.send("#{k.to_s}=", v) if self.attributes.keys.include? k.to_s.to_sym
+        end
     end
 
     # Now that the general framework for our ORM mapper is set up, let's start
@@ -123,6 +145,14 @@ class ORMapper
     # Write a method that will get all of the records from the database, and
     # return an array of them in object form.
     def self.all
+        sql = <<-SQL
+        SELECT
+            *
+        FROM
+            #{self.table_name};
+        SQL
+        results = $db.execute(sql)
+        return results.map { |row| self.new(row) }
     end
 
     # Let's write a method that counts how many elements there are.
@@ -131,6 +161,14 @@ class ORMapper
     # We can use the COUNT(*) SQL aggregator to get the count without needing to
     # load the rest of the data.
     def self.count
+        sql = <<-SQL
+        SELECT
+            COUNT(*)
+        FROM
+            #{self.table_name};
+        SQL
+        results = $db.execute(sql)
+        return results[0][0]
     end
 
     # Find a record by primary key. This should return an object or false if no
@@ -138,6 +176,17 @@ class ORMapper
     # Remember to use the ? substitution so you are not vulnerable to SQL
     # injection attacks.
     def self.find(id)
+        sql = <<-SQL
+        SELECT
+            *
+        FROM
+            #{self.table_name}
+        WHERE
+            id=?;
+        SQL
+        results = $db.execute(sql, id)
+        return false if results.count == 0
+        return self.new(results[0])
     end
 
     # We might want to search records by some of their attributes, rather than
@@ -156,6 +205,16 @@ class ORMapper
     #
     # If no records are found, this method should return an empty array
     def self.where(params)
+        where_clause = params.keys.map(&:to_s).join(' = ? AND ') + " = ?"
+        sql = <<-SQL
+        SELECT
+            *
+        FROM
+            #{self.table_name}
+        WHERE
+            #{where_clause};
+        SQL
+        return $db.execute(sql, params.values).map { |hash| self.new(hash) }
     end
 
     # We want a way to save new objects we create in ruby back to our database.
@@ -180,6 +239,35 @@ class ORMapper
     # You'll need another query to do that. You can use the MAX() aggregation
     # function on the id column to get the latest id.
     def insert
+        non_id_attrs = self.attributes.reject { |k,v| k == :id }
+        column_names = non_id_attrs.keys.map(&:to_s).join(', ')
+        question_mark_arr = []
+        (self.class.columns.count-1).times { question_mark_arr << '?' }
+        question_marks = question_mark_arr.join(', ')
+        sql = <<-SQL
+        INSERT INTO
+            #{self.class.table_name} (#{column_names})
+        VALUES
+            (#{question_marks});
+        SQL
+
+        begin
+            $db.execute(sql, *non_id_attrs.values)
+
+            # get new id
+            sql = <<-SQL
+            SELECT
+                MAX(id)
+            FROM
+                #{self.class.table_name};
+            SQL
+            result = $db.execute(sql)
+            self.id = result[0][0]
+
+            return true
+        rescue SQLite3::Exception
+            return false
+        end
     end
 
     # If the object has already been saved in the database and we want to
@@ -195,6 +283,22 @@ class ORMapper
     # and then to call the method you would do something like:
     #   $db.execute(sql, *["Test School", 1, 12, 2, 1])
     def update
+        non_id_attrs = self.attributes.reject { |k,v| k == :id }
+        update_str = non_id_attrs.keys.map(&:to_s).join(' = ?, ') + " = ?"
+        sql = <<-SQL
+        UPDATE
+            #{self.class.table_name}
+        SET
+            #{update_str}
+        WHERE
+            id=?;
+        SQL
+        begin
+            $db.execute(sql, *non_id_attrs.values, self.id)
+            return true
+        rescue SQLite3::Exception
+            return false
+        end
     end
 
     # It's annoying for developers to remember whether their objects have
@@ -204,5 +308,10 @@ class ORMapper
     # insert the record if it has not already been persisted
     # otherwise, update the record.
     def save
+        if self.id.nil?
+            return self.insert
+        else
+            return self.update
+        end
     end
 end
