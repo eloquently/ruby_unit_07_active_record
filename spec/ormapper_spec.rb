@@ -34,7 +34,7 @@ describe ORMapper do
             expect(CustomSchool.table_name).to eq('my_schools_table')
         end
     end
-=begin
+
     describe '::columns' do
         it 'returns list of columns' do
             expect(School.columns).to eq([:id, :name, :min_grade, :max_grade, :next_school_id])
@@ -233,5 +233,4 @@ describe ORMapper do
             school.save
         end
     end
-=end
 end
